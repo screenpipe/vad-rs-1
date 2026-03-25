@@ -1,6 +1,7 @@
 use eyre::{bail, Result};
 use ndarray::{Array1, Array2, ArrayD};
 use ort::inputs;
+use ort::value::TensorRef;
 use std::path::Path;
 
 use crate::{session, vad_result::VadResult};
@@ -13,7 +14,7 @@ use crate::{session, vad_result::VadResult};
 /// - Outputs: "stateN", "output"
 #[derive(Debug)]
 pub struct Vad {
-    session: ort::Session,
+    session: ort::session::Session,
     sample_rate: i64,
     state: ArrayD<f32>,
     context: Array1<f32>,
@@ -60,20 +61,24 @@ impl Vad {
 
         // Run inference with named inputs for v5/v6 format
         // The model expects: input, state, sr
+        let input_tensor = TensorRef::from_array_view(frame.view()).map_err(|e| eyre::eyre!("{e}"))?;
+        let state_tensor = TensorRef::from_array_view(self.state.view()).map_err(|e| eyre::eyre!("{e}"))?;
+        let sr_tensor = TensorRef::from_array_view(sr.view()).map_err(|e| eyre::eyre!("{e}"))?;
         let result = self.session.run(inputs![
-            "input" => frame.view(),
-            "state" => self.state.view(),
-            "sr" => sr.view()
-        ]?)?;
+            "input" => input_tensor,
+            "state" => state_tensor,
+            "sr" => sr_tensor
+        ]).map_err(|e| eyre::eyre!("{e}"))?;
 
         // Extract and update state from "stateN" output
-        let state_output = result
+        let (_state_shape, state_data) = result
             .get("stateN")
             .ok_or_else(|| eyre::eyre!("Missing stateN output"))?
-            .try_extract_tensor::<f32>()?;
+            .try_extract_tensor::<f32>()
+            .map_err(|e| eyre::eyre!("{e}"))?;
 
         // Clone the state data
-        let state_slice: Vec<f32> = state_output.iter().copied().collect();
+        let state_slice: Vec<f32> = state_data.to_vec();
         self.state = ArrayD::from_shape_vec([2, 1, 128].as_slice(), state_slice)?;
 
         // Update context with last context_size samples from input
@@ -90,12 +95,13 @@ impl Vad {
         }
 
         // Extract probability from "output"
-        let output = result
+        let (_output_shape, output_data) = result
             .get("output")
             .ok_or_else(|| eyre::eyre!("Missing output"))?
-            .try_extract_tensor::<f32>()?;
+            .try_extract_tensor::<f32>()
+            .map_err(|e| eyre::eyre!("{e}"))?;
 
-        let prob = *output.first().ok_or_else(|| eyre::eyre!("Empty output tensor"))?;
+        let prob = *output_data.first().ok_or_else(|| eyre::eyre!("Empty output tensor"))?;
 
         Ok(VadResult { prob })
     }
