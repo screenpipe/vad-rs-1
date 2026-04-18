@@ -1,6 +1,5 @@
 use eyre::{bail, Result};
 use ndarray::{Array1, Array2, ArrayD};
-use ort::inputs;
 use std::path::Path;
 
 use crate::{session, vad_result::VadResult};
@@ -13,7 +12,7 @@ use crate::{session, vad_result::VadResult};
 /// - Outputs: "stateN", "output"
 #[derive(Debug)]
 pub struct Vad {
-    session: ort::Session,
+    session: ort::session::Session,
     sample_rate: i64,
     state: ArrayD<f32>,
     context: Array1<f32>,
@@ -60,17 +59,17 @@ impl Vad {
 
         // Run inference with named inputs for v5/v6 format
         // The model expects: input, state, sr
-        let result = self.session.run(inputs![
-            "input" => frame.view(),
-            "state" => self.state.view(),
-            "sr" => sr.view()
-        ]?)?;
+        let result = self.session.run(ort::inputs![
+            "input" => ort::value::TensorRef::from_array_view(frame.view())?,
+            "state" => ort::value::TensorRef::from_array_view(self.state.view())?,
+            "sr" => ort::value::TensorRef::from_array_view(sr.view())?
+        ])?;
 
         // Extract and update state from "stateN" output
         let state_output = result
             .get("stateN")
             .ok_or_else(|| eyre::eyre!("Missing stateN output"))?
-            .try_extract_tensor::<f32>()?;
+            .try_extract_array::<f32>()?;
 
         // Clone the state data
         let state_slice: Vec<f32> = state_output.iter().copied().collect();
@@ -93,7 +92,7 @@ impl Vad {
         let output = result
             .get("output")
             .ok_or_else(|| eyre::eyre!("Missing output"))?
-            .try_extract_tensor::<f32>()?;
+            .try_extract_array::<f32>()?;
 
         let prob = *output.first().ok_or_else(|| eyre::eyre!("Empty output tensor"))?;
 
