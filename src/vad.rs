@@ -59,17 +59,21 @@ impl Vad {
 
         // Run inference with named inputs for v5/v6 format
         // The model expects: input, state, sr
-        let result = self.session.run(ort::inputs![
-            "input" => ort::value::TensorRef::from_array_view(frame.view())?,
-            "state" => ort::value::TensorRef::from_array_view(self.state.view())?,
-            "sr" => ort::value::TensorRef::from_array_view(sr.view())?
-        ])?;
+        let result = self
+            .session
+            .run(ort::inputs![
+                "input" => ort::value::TensorRef::from_array_view(&frame).map_err(|e| eyre::eyre!("ort: {e}"))?,
+                "state" => ort::value::TensorRef::from_array_view(&self.state).map_err(|e| eyre::eyre!("ort: {e}"))?,
+                "sr" => ort::value::TensorRef::from_array_view(&sr).map_err(|e| eyre::eyre!("ort: {e}"))?
+            ])
+            .map_err(|e| eyre::eyre!("ort: {e}"))?;
 
         // Extract and update state from "stateN" output
         let state_output = result
             .get("stateN")
             .ok_or_else(|| eyre::eyre!("Missing stateN output"))?
-            .try_extract_array::<f32>()?;
+            .try_extract_array::<f32>()
+            .map_err(|e| eyre::eyre!("ort: {e}"))?;
 
         // Clone the state data
         let state_slice: Vec<f32> = state_output.iter().copied().collect();
@@ -92,7 +96,8 @@ impl Vad {
         let output = result
             .get("output")
             .ok_or_else(|| eyre::eyre!("Missing output"))?
-            .try_extract_array::<f32>()?;
+            .try_extract_array::<f32>()
+            .map_err(|e| eyre::eyre!("ort: {e}"))?;
 
         let prob = *output.first().ok_or_else(|| eyre::eyre!("Empty output tensor"))?;
 
